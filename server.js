@@ -5,6 +5,7 @@ const fs = require("fs");
 const path = require("path");
 const ffmpeg = require("fluent-ffmpeg");
 const crypto = require("crypto");
+const WebSocket = require("ws");
 const { createClient } = require("@supabase/supabase-js");
 
 require("dotenv").config();
@@ -17,7 +18,12 @@ app.use(express.json());
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY
+  process.env.SUPABASE_SERVICE_ROLE_KEY,
+  {
+    realtime: {
+      transport: WebSocket
+    }
+  }
 );
 
 app.get("/", (req, res) => {
@@ -32,7 +38,10 @@ app.post("/split-video", upload.single("video"), async (req, res) => {
     const clipDuration = parseInt(req.body.clipDuration || "60", 10);
 
     if (!req.file) {
-      return res.status(400).json({ error: "No video file uploaded" });
+      return res.status(400).json({
+        success: false,
+        error: "No video file uploaded"
+      });
     }
 
     const jobId = crypto.randomUUID();
@@ -69,7 +78,6 @@ app.post("/split-video", upload.single("video"), async (req, res) => {
       const fileName = files[i];
       const filePath = path.join(outputDir, fileName);
       const storagePath = `${jobId}/${fileName}`;
-
       const fileBuffer = fs.readFileSync(filePath);
 
       const { error: uploadError } = await supabase.storage
@@ -105,6 +113,7 @@ app.post("/split-video", upload.single("video"), async (req, res) => {
     });
   } catch (error) {
     console.error(error);
+
     res.status(500).json({
       success: false,
       error: error.message
