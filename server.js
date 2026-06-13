@@ -4,6 +4,7 @@ const multer = require("multer");
 const fs = require("fs");
 const path = require("path");
 const ffmpeg = require("fluent-ffmpeg");
+const crypto = require("crypto");
 const { createClient } = require("@supabase/supabase-js");
 
 require("dotenv").config();
