@@ -9,10 +9,6 @@ const path = require('path');
 const os = require('os');
 const crypto = require('crypto');
 
-/**
- * Fix for Supabase client on some Node versions.
- * Requires "ws" package in package.json.
- */
 try {
   const WebSocket = require('ws');
   if (!globalThis.WebSocket) {
@@ -22,10 +18,6 @@ try {
   console.warn('ws package not found. If Supabase fails, install ws.');
 }
 
-/**
- * Optional ffmpeg-static support.
- * If you already install ffmpeg in Docker, this is still fine.
- */
 try {
   const ffmpegStatic = require('ffmpeg-static');
   if (ffmpegStatic) {
@@ -69,21 +61,14 @@ const OUTPUT_DIR = path.join(TMP_ROOT, 'outputs');
 fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 fs.mkdirSync(OUTPUT_DIR, { recursive: true });
 
-function safeFileName(name) {
-  return String(name || 'video')
-    .replace(/[^\w.\-]+/g, '_')
-    .replace(/_+/g, '_')
-    .slice(0, 120);
+function newId() {
+  if (crypto.randomUUID) return crypto.randomUUID();
+  return crypto.randomBytes(16).toString('hex');
 }
 
 function getExt(filename, fallback = '.mp4') {
   const ext = path.extname(filename || '').toLowerCase();
   return ext || fallback;
-}
-
-function newId() {
-  if (crypto.randomUUID) return crypto.randomUUID();
-  return crypto.randomBytes(16).toString('hex');
 }
 
 async function cleanup(paths) {
@@ -111,7 +96,7 @@ const storage = multer.diskStorage({
 const upload = multer({
   storage,
   limits: {
-    fileSize: 500 * 1024 * 1024, // 500 MB
+    fileSize: 500 * 1024 * 1024,
   },
 });
 
@@ -127,8 +112,6 @@ async function ensureBucket() {
   if (!exists) {
     const { error: createError } = await supabase.storage.createBucket(SUPABASE_BUCKET, {
       public: true,
-      fileSizeLimit: 524288000,
-      allowedMimeTypes: ['video/mp4', 'video/quicktime', 'video/x-matroska', 'video/webm'],
     });
 
     if (createError) {
@@ -151,7 +134,6 @@ async function uploadToSupabase(localPath, storagePath, contentType = 'video/mp4
     throw new Error(`Supabase upload failed for ${storagePath}: ${error.message}`);
   }
 
-  // Try signed URL first. If bucket is public, public URL also works.
   const { data: signedData, error: signedError } = await supabase.storage
     .from(SUPABASE_BUCKET)
     .createSignedUrl(storagePath, 60 * 60 * 24 * 7);
@@ -169,7 +151,7 @@ async function uploadToSupabase(localPath, storagePath, contentType = 'video/mp4
 
 function runFfmpegSplit(inputPath, outputPattern, clipDuration) {
   return new Promise((resolve, reject) => {
-    let ffmpegLogs = [];
+    const ffmpegLogs = [];
 
     ffmpeg(inputPath)
       .outputOptions([
@@ -177,11 +159,11 @@ function runFfmpegSplit(inputPath, outputPattern, clipDuration) {
         '-map 0:a?',
         '-c:v libx264',
         '-preset veryfast',
-        '-crf 23',
+        '-crf 28',
         '-pix_fmt yuv420p',
-        '-vf scale=trunc(iw/2)*2:trunc(ih/2)*2',
+        '-vf scale=trunc(min(iw\\,720)/2)*2:trunc(-2/2)*2',
         '-c:a aac',
-        '-b:a 128k',
+        '-b:a 96k',
         `-force_key_frames expr:gte(t,n_forced*${clipDuration})`,
         '-f segment',
         `-segment_time ${clipDuration}`,
@@ -252,7 +234,7 @@ app.post('/split-video', upload.single('video'), async (req, res) => {
     if (!Number.isFinite(clipDuration) || clipDuration <= 0) {
       return res.status(400).json({
         success: false,
-        error: 'Invalid clipDuration. Use a number like 10, 15, 30, or 60.',
+        error: 'Invalid clipDuration. Use 10, 15, 30, or 60.',
       });
     }
 
@@ -267,18 +249,9 @@ app.post('/split-video', upload.single('video'), async (req, res) => {
       clipDuration,
     });
 
-    const originalExt = getExt(req.file.originalname);
-    const originalStoragePath = `originals/${jobId}/original${originalExt}`;
-
-    const originalVideoUrl = await uploadToSupabase(
-      inputPath,
-      originalStoragePath,
-      req.file.mimetype || 'video/mp4'
-    );
-
     const { error: jobInsertError } = await supabase.from('video_jobs').insert({
       id: jobId,
-      original_video_url: originalVideoUrl,
+      original_video_url: null,
       clip_duration: clipDuration,
       status: 'processing',
     });
@@ -346,7 +319,7 @@ app.post('/split-video', upload.single('video'), async (req, res) => {
       success: true,
       jobId,
       clipDuration,
-      originalVideoUrl,
+      originalVideoUrl: null,
       clipsCount: clips.length,
       clips,
     });
